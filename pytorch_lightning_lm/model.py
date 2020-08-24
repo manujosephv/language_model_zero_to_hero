@@ -27,6 +27,7 @@ class RNNModel(pl.LightningModule):
         dropout=0.5,
         criterion=nn.CrossEntropyLoss(),
         pretrained_vectors=None,
+        metric=None,
         tie_weights=False,
     ):
         super(RNNModel, self).__init__()
@@ -38,6 +39,19 @@ class RNNModel(pl.LightningModule):
         self.nhid = nhid
         self.nlayers = nlayers
         self.pretrained_vectors = pretrained_vectors
+        self.metric = metric
+        self.save_hyperparameters(
+            "rnn_type",
+            "ntoken",
+            "ninp",
+            "nhid",
+            "nlayers",
+            "batch_size",
+            "device_type",
+            "dropout",
+            "criterion",
+            "metric",
+        )
 
         self.drop = nn.Dropout(dropout)
         self.encoder = nn.Embedding(ntoken, ninp)
@@ -49,16 +63,11 @@ class RNNModel(pl.LightningModule):
         if rnn_type in ["LSTM", "GRU"]:
             self.rnn = getattr(nn, rnn_type)(ninp, nhid, nlayers, dropout=dropout)
         else:
-            try:
-                nonlinearity = {"RNN_TANH": "tanh", "RNN_RELU": "relu"}[rnn_type]
-            except KeyError:
-                raise ValueError(
-                    """An invalid option for `--model` was supplied,
-                                 options are ['LSTM', 'GRU', 'RNN_TANH' or 'RNN_RELU']"""
-                )
-            self.rnn = nn.RNN(
-                ninp, nhid, nlayers, nonlinearity=nonlinearity, dropout=dropout
+            raise ValueError(
+                """An invalid option for `--model` was supplied,
+                                options are ['LSTM', 'GRU', 'RNN_TANH' or 'RNN_RELU']"""
             )
+
         self.decoder = nn.Linear(nhid, ntoken)
 
         # Optionally tie weights as in:
@@ -114,38 +123,68 @@ class RNNModel(pl.LightningModule):
         self.hidden = self.reset_hidden(self.hidden)
         output = self(text)
         loss = self.criterion(output.view(-1, self.ntoken), targets.view(-1))
+        result_dict = {"loss": loss}
         tensorboard_logs = {"train_loss": loss}
-        return {"loss": loss, "log": tensorboard_logs}
+        if self.metric is not None:
+            metric = self.metric(output.view(-1, self.ntoken), targets.view(-1))
+            result_dict[self.metric.name] = metric
+            tensorboard_logs[f"train_{self.metric.name}"] = metric
+        result_dict["log"] = tensorboard_logs
+        return result_dict
 
     def validation_step(self, batch, batch_nb):
         # OPTIONAL
         text, targets = batch.text, batch.target
         self.hidden = self.reset_hidden(self.hidden)
         output = self(text)
-        return {
+        result_dict = {
             "val_loss": self.criterion(output.view(-1, self.ntoken), targets.view(-1))
         }
+        if self.metric is not None:
+            metric = self.metric(output.view(-1, self.ntoken), targets.view(-1))
+            result_dict[f"val_{self.metric.name}"] = metric
+        return result_dict
 
     def validation_epoch_end(self, outputs):
         # OPTIONAL
         avg_loss = torch.stack([x["val_loss"] for x in outputs]).mean()
+        result_dict = {"val_loss": avg_loss}
         tensorboard_logs = {"val_loss": avg_loss}
-        return {"val_loss": avg_loss, "log": tensorboard_logs}
+        if self.metric is not None:
+            avg_metric = torch.stack(
+                [x[f"val_{self.metric.name}"] for x in outputs]
+            ).mean()
+            result_dict[f"val_{self.metric.name}"] = avg_metric
+            tensorboard_logs[f"val_{self.metric.name}"] = avg_metric
+        result_dict["log"] = tensorboard_logs
+        return result_dict
 
     def test_step(self, batch, batch_nb):
         # OPTIONAL
         text, targets = batch.text, batch.target
-        self.reset_hidden()
+        self.hidden = self.reset_hidden(self.hidden)
         output = self(text)
-        return {
+        result_dict = {
             "test_loss": self.criterion(output.view(-1, self.ntoken), targets.view(-1))
         }
+        if self.metric is not None:
+            metric = self.metric(output.view(-1, self.ntoken), targets.view(-1))
+            result_dict[f"test_{self.metric.name}"] = metric
+        return result_dict
 
     def test_epoch_end(self, outputs):
         # OPTIONAL
         avg_loss = torch.stack([x["test_loss"] for x in outputs]).mean()
-        logs = {"test_loss": avg_loss}
-        return {"test_loss": avg_loss, "log": logs, "progress_bar": logs}
+        result_dict = {"test_loss": avg_loss}
+        tensorboard_logs = {"test_loss": avg_loss}
+        if self.metric is not None:
+            avg_metric = torch.stack(
+                [x[f"test_{self.metric.name}"] for x in outputs]
+            ).mean()
+            result_dict[f"test_{self.metric.name}"] = avg_metric
+            tensorboard_logs[f"test_{self.metric.name}"] = avg_metric
+        result_dict["log"] = tensorboard_logs
+        return result_dict
 
     def configure_optimizers(self):
         # REQUIRED

@@ -133,3 +133,12 @@ dmypy.json
 
 #Data
 data/
+
+#Lightning Logs
+lightning_logs/
+
+models/
+
+wandb/
+
+neural_lms/
