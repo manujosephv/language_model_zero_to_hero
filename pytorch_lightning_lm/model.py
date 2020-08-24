@@ -11,7 +11,8 @@ from torchtext import data
 import spacy
 from torchtext.datasets import LanguageModelingDataset
 
-
+#Modified version of the LM here
+# https://github.com/pytorch/examples/blob/master/word_language_model/main.py
 class RNNModel(pl.LightningModule):
     """Container module with an encoder, a recurrent module, and a decoder."""
 
@@ -24,6 +25,7 @@ class RNNModel(pl.LightningModule):
         nlayers,
         batch_size,
         device_type,
+        lr=1e-3,
         dropout=0.5,
         criterion=nn.CrossEntropyLoss(),
         pretrained_vectors=None,
@@ -40,6 +42,7 @@ class RNNModel(pl.LightningModule):
         self.nlayers = nlayers
         self.pretrained_vectors = pretrained_vectors
         self.metric = metric
+        self.lr = lr
         self.save_hyperparameters(
             "rnn_type",
             "ntoken",
@@ -51,6 +54,7 @@ class RNNModel(pl.LightningModule):
             "dropout",
             "criterion",
             "metric",
+            "lr",
         )
 
         self.drop = nn.Dropout(dropout)
@@ -123,74 +127,47 @@ class RNNModel(pl.LightningModule):
         self.hidden = self.reset_hidden(self.hidden)
         output = self(text)
         loss = self.criterion(output.view(-1, self.ntoken), targets.view(-1))
-        result_dict = {"loss": loss}
-        tensorboard_logs = {"train_loss": loss}
+        result = pl.TrainResult(minimize=loss)
         if self.metric is not None:
             metric = self.metric(output.view(-1, self.ntoken), targets.view(-1))
-            result_dict[self.metric.name] = metric
-            tensorboard_logs[f"train_{self.metric.name}"] = metric
-        result_dict["log"] = tensorboard_logs
-        return result_dict
+            result.log(self.metric.name, metric, prog_bar=True)
+        return result
 
     def validation_step(self, batch, batch_nb):
         # OPTIONAL
         text, targets = batch.text, batch.target
         self.hidden = self.reset_hidden(self.hidden)
         output = self(text)
-        result_dict = {
-            "val_loss": self.criterion(output.view(-1, self.ntoken), targets.view(-1))
-        }
+        result = pl.EvalResult()
+        result.log(
+            "val_loss",
+            self.criterion(output.view(-1, self.ntoken), targets.view(-1)),
+            prog_bar=True,
+        )
         if self.metric is not None:
             metric = self.metric(output.view(-1, self.ntoken), targets.view(-1))
-            result_dict[f"val_{self.metric.name}"] = metric
-        return result_dict
-
-    def validation_epoch_end(self, outputs):
-        # OPTIONAL
-        avg_loss = torch.stack([x["val_loss"] for x in outputs]).mean()
-        result_dict = {"val_loss": avg_loss}
-        tensorboard_logs = {"val_loss": avg_loss}
-        if self.metric is not None:
-            avg_metric = torch.stack(
-                [x[f"val_{self.metric.name}"] for x in outputs]
-            ).mean()
-            result_dict[f"val_{self.metric.name}"] = avg_metric
-            tensorboard_logs[f"val_{self.metric.name}"] = avg_metric
-        result_dict["log"] = tensorboard_logs
-        return result_dict
+            result.log(f"val_{self.metric.name}", metric, prog_bar=True)
+        return result
 
     def test_step(self, batch, batch_nb):
         # OPTIONAL
         text, targets = batch.text, batch.target
         self.hidden = self.reset_hidden(self.hidden)
         output = self(text)
-        result_dict = {
-            "test_loss": self.criterion(output.view(-1, self.ntoken), targets.view(-1))
-        }
+        result = pl.EvalResult()
+        result.log(
+            "test_loss", self.criterion(output.view(-1, self.ntoken), targets.view(-1))
+        )
         if self.metric is not None:
             metric = self.metric(output.view(-1, self.ntoken), targets.view(-1))
-            result_dict[f"test_{self.metric.name}"] = metric
-        return result_dict
-
-    def test_epoch_end(self, outputs):
-        # OPTIONAL
-        avg_loss = torch.stack([x["test_loss"] for x in outputs]).mean()
-        result_dict = {"test_loss": avg_loss}
-        tensorboard_logs = {"test_loss": avg_loss}
-        if self.metric is not None:
-            avg_metric = torch.stack(
-                [x[f"test_{self.metric.name}"] for x in outputs]
-            ).mean()
-            result_dict[f"test_{self.metric.name}"] = avg_metric
-            tensorboard_logs[f"test_{self.metric.name}"] = avg_metric
-        result_dict["log"] = tensorboard_logs
-        return result_dict
+            result.log(f"test_{self.metric.name}", metric)
+        return result
 
     def configure_optimizers(self):
         # REQUIRED
         # can return multiple optimizers and learning_rate schedulers
         # (LBFGS it is automatically supported, no need for closure function)
-        return torch.optim.Adam(self.parameters(), lr=0.02)
+        return torch.optim.Adam(self.parameters(), lr=self.lr)
 
 
 # from data_module import QuotesDataModule
