@@ -139,7 +139,7 @@ class RNNModel(pl.LightningModule):
         text, targets = batch.text, batch.target
         self.hidden = self.reset_hidden(self.hidden)
         output = self(text)
-        result = pl.EvalResult()
+        result = pl.EvalResult(early_stop_on="val_loss")
         result.log(
             "val_loss",
             self.criterion(output.view(-1, self.ntoken), targets.view(-1)),
