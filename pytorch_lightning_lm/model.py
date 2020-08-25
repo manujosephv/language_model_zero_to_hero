@@ -128,6 +128,7 @@ class RNNModel(pl.LightningModule):
         output = self(text)
         loss = self.criterion(output.view(-1, self.ntoken), targets.view(-1))
         result = pl.TrainResult(minimize=loss)
+        result.log("train_loss", loss)
         if self.metric is not None:
             metric = self.metric(output.view(-1, self.ntoken), targets.view(-1))
             result.log(self.metric.name, metric, prog_bar=True)
