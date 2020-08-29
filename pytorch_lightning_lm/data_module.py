@@ -38,6 +38,7 @@ class QuotesDataModule(pl.LightningDataModule):
         valid_file: str = None,
         test_file: str = None,
         tokenizer=None,
+        unk_limit = 1,
         pretrained_vectors=None,
         batch_size=32,
         bptt=6,
@@ -53,7 +54,7 @@ class QuotesDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.bptt = bptt
         self._load_data()
-        self._build_vocab()
+        self._build_vocab(unk_limit)
         self.vocab = self.TEXT.vocab
 
     def _load_data(self):
@@ -68,7 +69,7 @@ class QuotesDataModule(pl.LightningDataModule):
         else:
             self.test_data = None
 
-    def _build_vocab(self):
+    def _build_vocab(self, unk_limit):
         if self.pretrained_vectors:
             if isinstance(self.pretrained_vectors, str):
                 assert (
@@ -81,7 +82,7 @@ class QuotesDataModule(pl.LightningDataModule):
                     "pretrained_vectors should either be str or torch.vocab.Vectors"
                 )
 
-        self.TEXT.build_vocab(self.train_data, vectors=self.pretrained_vectors)
+        self.TEXT.build_vocab(self.train_data, vectors=self.pretrained_vectors, min_freq=unk_limit)
 
     @classmethod
     def _make_iter(cls, dataset, batch_size, bptt_len):
