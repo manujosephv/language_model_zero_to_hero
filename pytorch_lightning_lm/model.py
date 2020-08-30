@@ -9,6 +9,7 @@ from torch.autograd import Variable
 import torchtext
 from torchtext import data
 import spacy
+import math
 from torchtext.datasets import LanguageModelingDataset
 
 # Modified version of the LM here
@@ -411,6 +412,200 @@ class AttentionLayer(nn.Module):
         return results
 
 
+class TransformerModel(pl.LightningModule):
+    """Container module with an encoder, a recurrent module, and a decoder."""
+
+    def __init__(
+        self,
+        ntoken,
+        ninp,
+        nhead,
+        nhid,
+        nlayers,
+        batch_size,
+        device_type,
+        lr=1e-3,
+        dropout=0.5,
+        criterion=nn.CrossEntropyLoss(),
+        pretrained_vectors=None,
+        metric=None,
+    ):
+        super(TransformerModel, self).__init__()
+        try:
+            from torch.nn import TransformerEncoder, TransformerEncoderLayer
+        except:
+            raise ImportError(
+                "TransformerEncoder module does not exist in PyTorch 1.1 or lower."
+            )
+        self.model_type = "Transformer"
+        self.ntoken = ntoken
+        self.device_type = device_type
+        self.criterion = criterion
+        self.batch_size = batch_size
+        self.nhid = nhid
+        self.ninp = ninp
+        self.nhead = nhead
+        self.nlayers = nlayers
+        self.pretrained_vectors = pretrained_vectors
+        self.metric = metric
+        self.lr = lr
+        self.save_hyperparameters(
+            "ntoken",
+            "ninp",
+            "nhid",
+            "nhead",
+            "nlayers",
+            "batch_size",
+            "device_type",
+            "dropout",
+            "criterion",
+            "metric",
+            "lr",
+        )
+
+        self.src_mask = None
+        self.pos_encoder = PositionalEncoding(ninp, dropout)
+        encoder_layers = TransformerEncoderLayer(ninp, nhead, nhid, dropout)
+        self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
+        self.encoder = nn.Embedding(ntoken, ninp)
+        self.decoder = nn.Linear(ninp, ntoken)
+        self.drop = nn.Dropout(dropout)
+        self.encoder = nn.Embedding(ntoken, ninp)
+        if pretrained_vectors is not None:
+            assert pretrained_vectors.shape == torch.Size(
+                [ntoken, ninp]
+            ), "When using pretrained embeddings, the embedding vector should have the dimensions (ntoken, ninp)"
+            self.encoder.weight.data.copy_(pretrained_vectors)
+
+        self.decoder = nn.Linear(ninp, ntoken)
+        self.init_weights()
+
+    def _generate_square_subsequent_mask(self, sz):
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = (
+            mask.float()
+            .masked_fill(mask == 0, float("-inf"))
+            .masked_fill(mask == 1, float(0.0))
+        )
+        return mask
+
+    def init_weights(self):
+        # initrange = 0.1
+        gain = nn.init.calculate_gain("relu")
+        nn.init.xavier_uniform_(self.encoder.weight, gain)
+        nn.init.zeros_(self.decoder.weight)
+        nn.init.xavier_uniform_(self.decoder.weight, gain)
+        # nn.init.uniform_(self.encoder.weight, -initrange, initrange)
+        # nn.init.uniform_(self.decoder.weight, -initrange, initrange)
+
+    def forward(self, src, has_mask=True):
+        if has_mask:
+            device = src.device
+            if self.src_mask is None or self.src_mask.size(0) != len(src):
+                mask = self._generate_square_subsequent_mask(len(src)).to(device)
+                self.src_mask = mask
+        else:
+            self.src_mask = None
+
+        src = self.encoder(src) * math.sqrt(self.ninp)
+        src = self.pos_encoder(src)
+        output = self.transformer_encoder(src, self.src_mask)
+        output = self.decoder(output)
+        return output
+
+
+    def training_step(self, batch, batch_nb):
+        # REQUIRED
+        text, targets = batch.text, batch.target
+        output = self(text)
+        loss = self.criterion(output.view(-1, self.ntoken), targets.view(-1))
+        result = pl.TrainResult(minimize=loss)
+        result.log("train_loss", loss)
+        if self.metric is not None:
+            metric = self.metric(output.view(-1, self.ntoken), targets.view(-1))
+            result.log(self.metric.name, metric, prog_bar=True)
+        return result
+
+    def validation_step(self, batch, batch_nb):
+        # OPTIONAL
+        text, targets = batch.text, batch.target
+        output = self(text)
+        val_loss = self.criterion(output.view(-1, self.ntoken), targets.view(-1))
+        result = pl.EvalResult(early_stop_on=val_loss)
+        result.log(
+            "val_loss", val_loss, prog_bar=True,
+        )
+        if self.metric is not None:
+            metric = self.metric(output.view(-1, self.ntoken), targets.view(-1))
+            result.log(f"val_{self.metric.name}", metric, prog_bar=True)
+        return result
+
+    def test_step(self, batch, batch_nb):
+        # OPTIONAL
+        text, targets = batch.text, batch.target
+        output = self(text)
+        result = pl.EvalResult()
+        result.log(
+            "test_loss", self.criterion(output.view(-1, self.ntoken), targets.view(-1))
+        )
+        if self.metric is not None:
+            metric = self.metric(output.view(-1, self.ntoken), targets.view(-1))
+            result.log(f"test_{self.metric.name}", metric)
+        return result
+
+    def configure_optimizers(self):
+        # REQUIRED
+        # can return multiple optimizers and learning_rate schedulers
+        # (LBFGS it is automatically supported, no need for closure function)
+        return torch.optim.Adam(self.parameters(), lr=self.lr)
+
+
+class PositionalEncoding(nn.Module):
+    r"""Inject some information about the relative or absolute position of the tokens
+        in the sequence. The positional encodings have the same dimension as
+        the embeddings, so that the two can be summed. Here, we use sine and cosine
+        functions of different frequencies.
+    .. math::
+        \text{PosEncoder}(pos, 2i) = sin(pos/10000^(2i/d_model))
+        \text{PosEncoder}(pos, 2i+1) = cos(pos/10000^(2i/d_model))
+        \text{where pos is the word position and i is the embed idx)
+    Args:
+        d_model: the embed dim (required).
+        dropout: the dropout value (default=0.1).
+        max_len: the max. length of the incoming sequence (default=5000).
+    Examples:
+        >>> pos_encoder = PositionalEncoding(d_model)
+    """
+
+    def __init__(self, d_model, dropout=0.1, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+        )
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1)
+        self.register_buffer("pe", pe)
+
+    def forward(self, x):
+        r"""Inputs of forward function
+        Args:
+            x: the sequence fed to the positional encoder model (required).
+        Shape:
+            x: [sequence length, batch size, embed dim]
+            output: [sequence length, batch size, embed dim]
+        Examples:
+            >>> output = pos_encoder(x)
+        """
+
+        x = x + self.pe[: x.size(0), :]
+        return self.dropout(x)
+
+
 # from data_module import QuotesDataModule
 
 # dm = QuotesDataModule(
@@ -421,17 +616,32 @@ class AttentionLayer(nn.Module):
 #     batch_size=32,
 #     bptt=6,
 # )
-# device = torch.device('cuda') #torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+# device = torch.device(
+#     "cpu"
+# )  # torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 # vocab = dm.TEXT.vocab
-# model = RNNAttentionModel(
-#     rnn_type="LSTM", ntoken=len(vocab), ninp=200, nhid=32, nlayers=2, batch_size=32, device_type= device.type
+# model = TransformerModel(
+#     ntoken=len(vocab),
+#     ninp=200,
+#     nhead=2,
+#     nhid=32,
+#     nlayers=2,
+#     batch_size=32,
+#     device_type=device.type,
+#     lr=1e-3,
+#     dropout=0.5,
+#     criterion=nn.CrossEntropyLoss(),
+#     pretrained_vectors=None,
+#     metric=None,
 # ).to(device)
 
-# trainer = pl.Trainer(gpus=1 if device.type =='cuda' else 0, 
-#                      max_epochs=5, 
-#                      logger=True, 
-#                      auto_lr_find=False,
-#                     fast_dev_run=True)#, logger= wandb_logger) #fast_dev_run=True,
+# trainer = pl.Trainer(
+#     gpus=1 if device.type == "cuda" else 0,
+#     max_epochs=5,
+#     logger=True,
+#     auto_lr_find=False,
+#     fast_dev_run=True,
+# )  # , logger= wandb_logger) #fast_dev_run=True,
 
 # trainer.fit(model, datamodule=dm)
 
