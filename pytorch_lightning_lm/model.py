@@ -42,6 +42,7 @@ class RNNModel(pl.LightningModule):
         self.nhid = nhid
         self.ninp = ninp
         self.nlayers = nlayers
+        self.dropout=dropout
         self.pretrained_vectors = pretrained_vectors
         self.metric = metric
         self.lr = lr
@@ -57,6 +58,7 @@ class RNNModel(pl.LightningModule):
             "criterion",
             "metric",
             "lr",
+            "dropout"
         )
 
         self.drop = nn.Dropout(dropout)
@@ -218,6 +220,7 @@ class RNNAttentionModel(pl.LightningModule):
         self.nhid = nhid
         self.ninp = ninp
         self.nlayers = nlayers
+        self.dropout=dropout
         self.pretrained_vectors = pretrained_vectors
         self.metric = metric
         self.lr = lr
@@ -235,6 +238,7 @@ class RNNAttentionModel(pl.LightningModule):
             "metric",
             "lr",
             "attention_width",
+            "dropout"
         )
 
         self.drop = nn.Dropout(dropout)
@@ -276,9 +280,9 @@ class RNNAttentionModel(pl.LightningModule):
         # initrange = 0.1
         gain = nn.init.calculate_gain("relu")
         nn.init.xavier_uniform_(self.encoder.weight, gain)
+        nn.init.zeros_(self.decoder.weight)
         nn.init.xavier_uniform_(self.decoder.weight, gain)
         # nn.init.uniform_(self.encoder.weight, -initrange, initrange)
-        # nn.init.zeros_(self.decoder.weight)
         # nn.init.uniform_(self.decoder.weight, -initrange, initrange)
 
     def forward(self, input):
