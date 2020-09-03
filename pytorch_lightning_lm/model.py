@@ -62,7 +62,8 @@ class RNNModel(pl.LightningModule):
             "metric",
             "lr",
             "dropout",
-            "weight_decay"
+            "weight_decay",
+            "tie_weights"
         )
 
         self.drop = nn.Dropout(dropout)
@@ -252,7 +253,8 @@ class RNNAttentionModel(pl.LightningModule):
             "dropout",
             "attention",
             "query_dim",
-            "weight_decay"
+            "weight_decay",
+            "tie_weights"
         )
 
         self.drop = nn.Dropout(dropout)
