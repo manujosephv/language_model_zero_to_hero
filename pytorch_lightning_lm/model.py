@@ -28,6 +28,7 @@ class RNNModel(pl.LightningModule):
         batch_size,
         device_type,
         lr=1e-3,
+        weight_decay=0,
         dropout=0.5,
         criterion=nn.CrossEntropyLoss(),
         pretrained_vectors=None,
@@ -47,6 +48,7 @@ class RNNModel(pl.LightningModule):
         self.pretrained_vectors = pretrained_vectors
         self.metric = metric
         self.lr = lr
+        self.weight_decay = weight_decay
         self.save_hyperparameters(
             "rnn_type",
             "ntoken",
@@ -60,6 +62,7 @@ class RNNModel(pl.LightningModule):
             "metric",
             "lr",
             "dropout",
+            "weight_decay"
         )
 
         self.drop = nn.Dropout(dropout)
@@ -175,7 +178,7 @@ class RNNModel(pl.LightningModule):
         # REQUIRED
         # can return multiple optimizers and learning_rate schedulers
         # (LBFGS it is automatically supported, no need for closure function)
-        return torch.optim.Adam(self.parameters(), lr=self.lr)
+        return torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
 
 
 def plot_grad_flow(named_parameters):
@@ -209,6 +212,7 @@ class RNNAttentionModel(pl.LightningModule):
         batch_size,
         device_type,
         lr=1e-3,
+        weight_decay=0,
         dropout=0.5,
         attention="self",
         query_dim=None,
@@ -232,6 +236,7 @@ class RNNAttentionModel(pl.LightningModule):
         self.lr = lr
         self.attention = attention
         self.query_dim = query_dim
+        self.weight_decay = weight_decay
         self.save_hyperparameters(
             "rnn_type",
             "ntoken",
@@ -246,7 +251,8 @@ class RNNAttentionModel(pl.LightningModule):
             "lr",
             "dropout",
             "attention",
-            "query_dim"
+            "query_dim",
+            "weight_decay"
         )
 
         self.drop = nn.Dropout(dropout)
@@ -387,7 +393,7 @@ class RNNAttentionModel(pl.LightningModule):
         # REQUIRED
         # can return multiple optimizers and learning_rate schedulers
         # (LBFGS it is automatically supported, no need for closure function)
-        return torch.optim.Adam(self.parameters(), lr=self.lr)
+        return torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay = self.weight_decay)
 
 
 class DotProductAttentionLayer(nn.Module):
@@ -646,6 +652,7 @@ class TransformerModel(pl.LightningModule):
         batch_size,
         device_type,
         lr=1e-3,
+        weight_decay = 0,
         dropout=0.5,
         criterion=nn.CrossEntropyLoss(),
         pretrained_vectors=None,
@@ -670,6 +677,7 @@ class TransformerModel(pl.LightningModule):
         self.pretrained_vectors = pretrained_vectors
         self.metric = metric
         self.lr = lr
+        self.weight_decay = weight_decay
         self.save_hyperparameters(
             "ntoken",
             "ninp",
@@ -682,6 +690,7 @@ class TransformerModel(pl.LightningModule):
             "criterion",
             "metric",
             "lr",
+            "weight_decay"
         )
 
         self.src_mask = None
@@ -777,7 +786,7 @@ class TransformerModel(pl.LightningModule):
         # REQUIRED
         # can return multiple optimizers and learning_rate schedulers
         # (LBFGS it is automatically supported, no need for closure function)
-        return torch.optim.Adam(self.parameters(), lr=self.lr)
+        return torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay= self.weight_decay)
 
 
 class PositionalEncoding(nn.Module):
