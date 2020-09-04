@@ -702,7 +702,6 @@ class TransformerModel(pl.LightningModule):
         self.encoder = nn.Embedding(ntoken, ninp)
         self.decoder = nn.Linear(ninp, ntoken)
         self.drop = nn.Dropout(dropout)
-        self.encoder = nn.Embedding(ntoken, ninp)
         if pretrained_vectors is not None:
             assert pretrained_vectors.shape == torch.Size(
                 [ntoken, ninp]
@@ -722,13 +721,10 @@ class TransformerModel(pl.LightningModule):
         return mask
 
     def init_weights(self):
-        # initrange = 0.1
         gain = nn.init.calculate_gain("relu")
         nn.init.xavier_uniform_(self.encoder.weight, gain)
         nn.init.zeros_(self.decoder.weight)
         nn.init.xavier_uniform_(self.decoder.weight, gain)
-        # nn.init.uniform_(self.encoder.weight, -initrange, initrange)
-        # nn.init.uniform_(self.decoder.weight, -initrange, initrange)
 
     def forward(self, src, has_mask=True):
         if has_mask:
