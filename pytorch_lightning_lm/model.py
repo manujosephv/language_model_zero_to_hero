@@ -12,6 +12,7 @@ import spacy
 import math
 from torchtext.datasets import LanguageModelingDataset
 import matplotlib.pyplot as plt
+import plotly.express as px
 
 # Modified version of the LM here
 # https://github.com/pytorch/examples/blob/master/word_language_model/main.py
@@ -197,7 +198,7 @@ def plot_grad_flow(named_parameters):
     plt.ylabel("average gradient")
     plt.title("Gradient flow")
     plt.grid(True)
-    plt.show()
+    # plt.show()
 
 
 class RNNAttentionModel(pl.LightningModule):
@@ -659,6 +660,7 @@ class TransformerModel(pl.LightningModule):
         criterion=nn.CrossEntropyLoss(),
         pretrained_vectors=None,
         metric=None,
+        log_grad_norm = False
     ):
         super(TransformerModel, self).__init__()
         try:
@@ -695,6 +697,7 @@ class TransformerModel(pl.LightningModule):
             "weight_decay"
         )
 
+        self.log_grad_norm = log_grad_norm
         self.src_mask = None
         self.pos_encoder = PositionalEncoding(ninp, dropout)
         encoder_layers = TransformerEncoderLayer(ninp, nhead, nhid, dropout)
@@ -780,6 +783,23 @@ class TransformerModel(pl.LightningModule):
             result.log(f"test_{self.metric.name}", metric)
         return result
 
+    def on_after_backward(self):
+        if self.log_grad_norm:
+            grads = {}
+            for n, p in self.named_parameters():
+                if (p.requires_grad) and ("bias" not in n):
+                    grads[n] = p.grad.abs().mean()
+            self.logger.log_metrics(grads, step=self.global_step)
+            # ave_grads = []
+            # layers = []
+            # for n, p in self.named_parameters():
+            #     if (p.requires_grad) and ("bias" not in n):
+            #         layers.append(n)
+            #         ave_grads.append(p.grad.abs().mean())
+            # fig = px.bar(x=layers, y=ave_grads, title="Gradient Norms")
+            # self.logger.experiment.log(self.logger.experiment.Image(fig, caption='Gradient Norms'))
+        # plot_grad_flow(self.named_parameters())
+
     def configure_optimizers(self):
         # REQUIRED
         # can return multiple optimizers and learning_rate schedulers
@@ -848,38 +868,38 @@ def test():
         "cuda"
     )  # torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     vocab = dm.TEXT.vocab
-    # model = TransformerModel(
-    #     ntoken=len(vocab),
-    #     ninp=200,
-    #     nhead=2,
-    #     nhid=32,
-    #     nlayers=2,
-    #     batch_size=32,
-    #     device_type=device.type,
-    #     lr=1e-3,
-    #     dropout=0.5,
-    #     criterion=nn.CrossEntropyLoss(),
-    #     pretrained_vectors=None,
-    #     metric=None,
-    # ).to(device)
-
-    model = RNNAttentionModel(
-        rnn_type="LSTM",
+    model = TransformerModel(
         ntoken=len(vocab),
         ninp=200,
-        nhid=200,
+        nhead=2,
+        nhid=32,
         nlayers=2,
         batch_size=32,
         device_type=device.type,
         lr=1e-3,
         dropout=0.5,
-        attention="self",
-        query_dim=200,
         criterion=nn.CrossEntropyLoss(),
         pretrained_vectors=None,
         metric=None,
-        tie_weights=True,
     ).to(device)
+
+    # model = RNNAttentionModel(
+    #     rnn_type="LSTM",
+    #     ntoken=len(vocab),
+    #     ninp=200,
+    #     nhid=200,
+    #     nlayers=2,
+    #     batch_size=32,
+    #     device_type=device.type,
+    #     lr=1e-3,
+    #     dropout=0.5,
+    #     attention="self",
+    #     query_dim=200,
+    #     criterion=nn.CrossEntropyLoss(),
+    #     pretrained_vectors=None,
+    #     metric=None,
+    #     tie_weights=True,
+    # ).to(device)
 
     trainer = pl.Trainer(
         gpus=1 if device.type == "cuda" else 0,
