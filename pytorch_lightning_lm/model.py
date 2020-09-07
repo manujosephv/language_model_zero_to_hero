@@ -218,7 +218,7 @@ class RNNAttentionModel(pl.LightningModule):
         lr=1e-3,
         weight_decay=0,
         dropout=0.5,
-        attention="self",
+        attention="scaled_dot",
         query_dim=None,
         criterion=nn.CrossEntropyLoss(),
         pretrained_vectors=None,
@@ -281,16 +281,19 @@ class RNNAttentionModel(pl.LightningModule):
             self.decoder = nn.Linear(self.query_dim, ntoken)
         elif attention == "dot_concat":
             self.attn_layer = DotProductConcatAttentionLayer(nhid, device_type)
-            self.decoder = nn.Linear(2 * nhid, ntoken)
-        elif attention == "additive_absolute":
-            self.attn_layer = AdditiveAbsoluteAttentionLayer(nhid, device_type)
             self.decoder = nn.Linear(nhid, ntoken)
-        elif attention == "additive_relative":
-            self.attn_layer = AdditiveRelativeAttentionLayer(nhid, device_type)
+        elif attention == "mlp_absolute":
+            self.attn_layer = MLPAbsoluteAttentionLayer(nhid, device_type)
+            self.decoder = nn.Linear(nhid, ntoken)
+        elif attention == "mlp_relative":
+            self.attn_layer = MLPRelativeAttentionLayer(nhid, device_type)
+            self.decoder = nn.Linear(nhid, ntoken)
+        elif attention == "additive_concat":
+            self.attn_layer = AdditiveAttentionLayer(nhid, device_type)
             self.decoder = nn.Linear(nhid, ntoken)
         else:
             raise ValueError(
-                "An invalid option for attention was supplied. Options are ['dot_concat','scaled_dot','additive_absolute','additive_relative']"
+                "An invalid option for attention was supplied. Options are ['dot_concat','scaled_dot','mlp_absolute','mlp_relative','additive_concat']"
             )
 
         # Optionally tie weights as in:
@@ -330,7 +333,7 @@ class RNNAttentionModel(pl.LightningModule):
     def forward(self, input):
         emb = self.drop(self.encoder(input))
         output, self.hidden = self.rnn(emb, self.hidden)
-        _output, attention_weights = self.attn_layer(output)
+        output, attention_weights = self.attn_layer(output)
         output = self.drop(output)
         decoded = self.decoder(output)
         decoded = decoded.view(-1, self.ntoken)
@@ -424,29 +427,96 @@ class RNNAttentionModel(pl.LightningModule):
         )
 
 
+# class DotProductConcatAttentionLayer(nn.Module):
+#     """Implements an Attention Layer"""
+
+#     def __init__(self, nhid, device_type):
+#         super(DotProductConcatAttentionLayer, self).__init__()
+#         self.nhid = nhid
+#         self.W_q = nn.Parameter(torch.Tensor(nhid, nhid))
+#         self.W_k = nn.Parameter(torch.Tensor(nhid, nhid))
+#         self.W_v = nn.Parameter(torch.Tensor(nhid, nhid))
+#         self.device_type = device_type
+#         self.initialize_weights()
+
+#     def initialize_weights(self):
+#         gain = nn.init.calculate_gain("relu")
+#         nn.init.xavier_uniform_(self.W_q.data, gain)
+#         nn.init.xavier_uniform_(self.W_k.data, gain)
+#         nn.init.xavier_uniform_(self.W_v.data, gain)
+
+#     def forward(self, inputs):
+#         results = None
+#         attention_thru_time = []
+#         for i in range(inputs.size(0)):
+#             if i < 2:
+#                 output = inputs[i].unsqueeze(0)
+#                 output = torch.cat((output, output), dim=-1)
+#                 attention_thru_time.append(torch.ones(1))
+#             else:
+#                 lb = 0
+#                 selector = torch.arange(lb, i + 1).long().to(self.device_type)
+#                 # Selecting and making batch first
+#                 # T x B x H
+#                 vec = torch.index_select(inputs, 0, selector)
+#                 # B x T x H
+#                 hidden = vec[:-1].permute(1, 0, 2)
+#                 # B x T x H
+#                 output = vec[-1].unsqueeze(0).permute(1, 0, 2)
+#                 query_vector = torch.bmm(
+#                     output, self.W_q.unsqueeze(0).repeat(output.size(0), 1, 1)
+#                 )
+#                 key_vector = torch.bmm(
+#                     hidden, self.W_k.unsqueeze(0).repeat(hidden.size(0), 1, 1)
+#                 )
+#                 value_vector = torch.bmm(hidden, self.W_v.unsqueeze(0).repeat(hidden.size(0), 1, 1))
+                
+#                 # B x 1 x T
+#                 attention_weights = torch.bmm(query_vector, key_vector.permute(0, 2, 1))/ int(
+#                     math.sqrt(self.query_dim)
+#                 )
+#                 # B x T
+#                 attention_weights = torch.softmax(attention_weights, dim=-1).squeeze()
+#                 # B x T x H
+#                 context_vector = value_vector * attention_weights.unsqueeze(-1).expand_as(value_vector)
+#                 # B x H
+#                 context_vector = torch.sum(context_vector, dim=1)
+#                 # context_vector = torch.rand(context_vector.size()).to(self.device_type)
+#                 # 1 x B x 2H
+#                 output = torch.cat((output, context_vector.unsqueeze(1)), dim=-1)
+#                 # B x 1 x 2H
+#                 output = output.permute(1, 0, 2)
+#                 attention_thru_time.append(attention_weights.detach().cpu())
+
+#             if results is None:
+#                 results = output
+#             else:
+#                 results = torch.cat((results, output), 0)
+
+#         return results, attention_thru_time
+
+
 class DotProductConcatAttentionLayer(nn.Module):
     """Implements an Attention Layer"""
 
     def __init__(self, nhid, device_type):
         super(DotProductConcatAttentionLayer, self).__init__()
         self.nhid = nhid
-        self.W_q = nn.Parameter(torch.Tensor(nhid, nhid))
-        self.W_k = nn.Parameter(torch.Tensor(nhid, nhid))
         self.device_type = device_type
+        self.concat = nn.Linear(2 * nhid, nhid)
         self.initialize_weights()
 
     def initialize_weights(self):
         gain = nn.init.calculate_gain("relu")
-        nn.init.xavier_uniform_(self.W_q.data, gain)
-        nn.init.xavier_uniform_(self.W_k.data, gain)
+        nn.init.zeros_(self.concat.bias)
+        nn.init.xavier_uniform_(self.concat.weight, gain)
 
-    def forward(self, inputs, attention_width=3):
+    def forward(self, inputs):
         results = None
         attention_thru_time = []
         for i in range(inputs.size(0)):
             if i < 2:
                 output = inputs[i].unsqueeze(0)
-                output = torch.cat((output, output), dim=-1)
                 attention_thru_time.append(torch.ones(1))
             else:
                 lb = 0
@@ -456,16 +526,11 @@ class DotProductConcatAttentionLayer(nn.Module):
                 vec = torch.index_select(inputs, 0, selector)
                 # B x T x H
                 hidden = vec[:-1].permute(1, 0, 2)
-                # B x T x H
+                # B x 1 x H
                 output = vec[-1].unsqueeze(0).permute(1, 0, 2)
-                query_vector = torch.bmm(
-                    output, self.W_q.unsqueeze(0).repeat(output.size(0), 1, 1)
-                )
-                key_vector = torch.bmm(
-                    hidden, self.W_k.unsqueeze(0).repeat(hidden.size(0), 1, 1)
-                )
+                
                 # B x 1 x T
-                attention_weights = torch.bmm(query_vector, key_vector.permute(0, 2, 1))
+                attention_weights = torch.bmm(output, hidden.permute(0, 2, 1))
                 # B x T
                 attention_weights = torch.softmax(attention_weights, dim=-1).squeeze()
                 # B x T x H
@@ -475,8 +540,8 @@ class DotProductConcatAttentionLayer(nn.Module):
                 # context_vector = torch.rand(context_vector.size()).to(self.device_type)
                 # 1 x B x 2H
                 output = torch.cat((output, context_vector.unsqueeze(1)), dim=-1)
-                # B x 1 x 2H
-                output = output.permute(1, 0, 2)
+                # B x 1 x H
+                output = torch.tanh(self.concat(output)).permute(1, 0, 2)
                 attention_thru_time.append(attention_weights.detach().cpu())
 
             if results is None:
@@ -485,7 +550,6 @@ class DotProductConcatAttentionLayer(nn.Module):
                 results = torch.cat((results, output), 0)
 
         return results, attention_thru_time
-
 
 class ScaledDotProductAttentionLayer(nn.Module):
     """Implements an Attention Layer"""
@@ -524,7 +588,7 @@ class ScaledDotProductAttentionLayer(nn.Module):
                 vec = torch.index_select(inputs, 0, selector).permute(1, 0, 2)
                 # B x T x H
                 output = vec[:, -1, :].unsqueeze(1)
-                # B x T x H/2
+                # B x T x H'
                 q = torch.bmm(
                     output, self.W_q.unsqueeze(0).repeat(output.size(0), 1, 1)
                 )
@@ -536,9 +600,9 @@ class ScaledDotProductAttentionLayer(nn.Module):
                 )
                 # B x 1 x T
                 attention_weights = torch.softmax(attention_weights, dim=-1).squeeze()
-                # B x T x H/2
+                # B x T x H'
                 context_vector = v * attention_weights.unsqueeze(-1).expand_as(v)
-                # B x H/2
+                # B x H'
                 output = torch.sum(context_vector, dim=1).unsqueeze(0)
                 attention_thru_time.append(attention_weights.detach().cpu())
 
@@ -551,11 +615,11 @@ class ScaledDotProductAttentionLayer(nn.Module):
 
 
 # https://www.aclweb.org/anthology/I17-1045.pdf
-class AdditiveAbsoluteAttentionLayer(nn.Module):
+class MLPAbsoluteAttentionLayer(nn.Module):
     """Implements an Attention Layer"""
 
     def __init__(self, nhid, device_type):
-        super(AdditiveAbsoluteAttentionLayer, self).__init__()
+        super(MLPAbsoluteAttentionLayer, self).__init__()
         self.nhid = nhid
         self.W_k = nn.Parameter(torch.Tensor(nhid, nhid))
         self.weight_proj = nn.Parameter(torch.Tensor(nhid, 1))
@@ -620,11 +684,11 @@ class AdditiveAbsoluteAttentionLayer(nn.Module):
 
 
 # https://www.aclweb.org/anthology/I17-1045.pdf
-class AdditiveRelativeAttentionLayer(nn.Module):
+class MLPRelativeAttentionLayer(nn.Module):
     """Implements an Attention Layer"""
 
     def __init__(self, nhid, device_type):
-        super(AdditiveRelativeAttentionLayer, self).__init__()
+        super(MLPRelativeAttentionLayer, self).__init__()
         self.nhid = nhid
         self.W_k = nn.Parameter(torch.Tensor(nhid, nhid))
         self.W_q = nn.Parameter(torch.Tensor(nhid, nhid))
@@ -695,6 +759,74 @@ class AdditiveRelativeAttentionLayer(nn.Module):
 
         return results, attention_thru_time
 
+class AdditiveAttentionLayer(nn.Module):
+    """Implements an Attention Layer"""
+
+    def __init__(self, nhid, device_type):
+        super(AdditiveAttentionLayer, self).__init__()
+        self.nhid = nhid
+        self.W_weight = nn.Parameter(torch.Tensor(2*nhid, nhid))
+        self.weight_proj = nn.Parameter(torch.Tensor(nhid, 1))
+        self.concat = nn.Linear(2 * nhid, nhid)
+        self.device_type = device_type
+        self.initialize_weights()
+
+    def initialize_weights(self):
+        gain = nn.init.calculate_gain("relu")
+        nn.init.xavier_uniform_(self.W_weight.data, gain)
+        nn.init.xavier_uniform_(self.weight_proj.data, gain)
+        nn.init.zeros_(self.concat.bias)
+        nn.init.xavier_uniform_(self.concat.weight, gain)
+
+    def forward(self, inputs):
+        results = None
+        attention_thru_time = []
+        for i in range(inputs.size(0)):
+            if i < 2:  # i < attention_width:
+                output = inputs[i]
+                output = output.unsqueeze(0)
+                attention_thru_time.append(torch.ones(1))
+            else:
+                selector = torch.arange(0, i + 1).long().to(self.device_type)
+                # Selecting and making batch first
+                # T x B x H
+                vec = torch.index_select(inputs, 0, selector)
+                # B x T x H
+                hidden = vec[:-1].permute(1, 0, 2)
+                # B x 1 x H
+                output = vec[-1].unsqueeze(0).permute(1, 0, 2)
+                # B x T x 2H
+                concat = torch.cat((hidden, output.expand_as(hidden)), dim=-1)
+
+                # B x T x H
+                concat = torch.tanh(
+                    torch.bmm(
+                        concat, self.W_weight.unsqueeze(0).repeat(concat.size(0), 1, 1)
+                    )
+                )
+                # B x T x 1
+                attention_weights = torch.bmm(
+                    concat,
+                    self.weight_proj.unsqueeze(0).repeat(concat.size(0), 1, 1),
+                )
+                #  B x T x 1
+                attention_weights = torch.softmax(attention_weights, dim=1)
+                # B x T x H
+                context_vector = hidden * attention_weights.expand_as(hidden)
+                # B x H
+                context_vector = torch.sum(context_vector, dim=1)
+                # B x 1 x H
+                context_vector = context_vector.unsqueeze(1)
+                output = torch.cat((output, context_vector), dim=-1)
+                output = torch.tanh(self.concat(output)).permute(1, 0, 2)
+                attention_thru_time.append(attention_weights.detach().cpu())
+
+            if results is None:
+                results = output
+            else:
+                results = torch.cat((results, output), 0)
+
+        return results, attention_thru_time
 
 class AttentionLayer_bkp(nn.Module):
     """Implements an Attention Layer"""
@@ -979,6 +1111,7 @@ def test():
     device = torch.device(
         "cuda"
     )  # torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+
     vocab = dm.TEXT.vocab
     # model = TransformerModel(
     #     ntoken=len(vocab),
@@ -993,8 +1126,8 @@ def test():
     #     criterion=nn.CrossEntropyLoss(),
     #     pretrained_vectors=None,
     #     metric=None,
-    # ).to(device)
-
+    # # ).to(device)
+    # 'dot_concat','scaled_dot','mlp_absolute','mlp_relative','additive_concat'
     model = RNNAttentionModel(
         rnn_type="LSTM",
         ntoken=len(vocab),
@@ -1005,7 +1138,7 @@ def test():
         device_type=device.type,
         lr=1e-3,
         dropout=0.5,
-        attention="additive_relative",
+        attention="mlp_absolute",
         query_dim=200,
         criterion=nn.CrossEntropyLoss(),
         pretrained_vectors=None,
@@ -1030,7 +1163,19 @@ def test():
     # seq[-l:] = x[-l:]
     # seq = seq.unsqueeze(1)
 
-    # toks = dm.TEXT.preprocess("When life hands you lemons")
+    # model = RNNAttentionModel.load_from_checkpoint("models/RNN_LM_w_Att_LSTM_self_128_16_300_300_2_0.5_tied_weights.ckpt")
+    # model.eval()
+    # model = model.to('cpu')
+    # model.hidden = model.init_hidden(1)
+    # vocab = torch.load("models/RNN_LM_w_Att_LSTM_self_128_16_300_300_2_0.5_tied_weights_vocab.sav")
+
+    # weight_matrix = vocab.vectors
+    # ntoken, ninp = weight_matrix.shape
+    # assert(model.encoder.weight.data.shape == torch.Size([ntoken,ninp]))
+    # toks = "When life hands you lemons".lower().split()
+    # x = torch.LongTensor([vocab.stoi[x] for x in toks])
+    # out, att_weights = model(x.unsqueeze(1))
+
     # x = dm.TEXT.numericalize([toks]).to('cpu').squeeze()
     # x = x.unsqueeze(0).repeat(2,1)
     # model.hidden = model.init_hidden(1)
